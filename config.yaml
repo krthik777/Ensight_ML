@@ -1,0 +1,27 @@
+# config.yaml
+data:
+  data_path: "data/processed"
+  sampling_rate: "1S"
+
+database:
+  path: "energy_data.db"
+
+file_mappings:
+  "1": "mains"
+  "2": "mains" 
+  "3": "fridge"
+  "4": "air_conditioner"
+  "5": "air_conditioner"
+  "6": "washing_machine"
+  "7": "laptop_computer"
+  "8": "iron"
+  "9": "kitchen_outlets"
+  "10": "television"
+  "11": "water_filter"
+  "12": "water_motor"
+
+training:
+  sequence_length: 50
+  batch_size: 32
+  learning_rate: 0.001
+  epochs: 50

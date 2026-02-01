@@ -1,0 +1,27 @@
+{
+  "appliance_names": [
+    "air_conditioner",
+    "fridge",
+    "iron",
+    "kitchen_outlets",
+    "laptop_computer",
+    "television",
+    "washing_machine",
+    "water_filter",
+    "water_motor"
+  ],
+  "max_values": {
+    "mains_W": 8911.1601563,
+    "air_conditioner_W": 6134.858,
+    "fridge_W": 200.0,
+    "iron_W": 1500.0,
+    "kitchen_outlets_W": 1390.604,
+    "laptop_computer_W": 90.0,
+    "television_W": 79.622,
+    "washing_machine_W": 574.06,
+    "water_filter_W": 100.0,
+    "water_motor_W": 1500.0
+  },
+  "sequence_length": 50,
+  "training_date": "2025-10-19T23:54:02.071731"
+}

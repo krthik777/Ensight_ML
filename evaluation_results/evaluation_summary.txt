@@ -1,0 +1,68 @@
+
+NILM MODEL EVALUATION REPORT
+Generated: 2025-10-18 23:02:40
+========================================================
+
+MODEL OVERVIEW:
+- Architecture: LSTM Neural Network
+- Input: 50 timesteps of mains power data
+- Output: 9 appliance power levels
+- Appliances: air_conditioner, fridge, iron, kitchen_outlets, laptop_computer, television, washing_machine, water_filter, water_motor
+
+PERFORMANCE SUMMARY:
+
+Overall Performance:
+- Average Classification Accuracy: 100.0%
+- Average F1-Score: 100.0%
+- Average RMSE: 32.4W
+
+DETAILED APPLIANCE PERFORMANCE:
+
+AIR_CONDITIONER     
+  - Classification Accuracy: 100.0%
+  - F1-Score: 100.0%
+  - RMSE: 120.9W
+  - R² Score: 0.978
+  - Mean Power: 887.3W
+
+FRIDGE              
+  - Classification Accuracy: 100.0%
+  - F1-Score: 100.0%
+  - RMSE: 7.5W
+  - R² Score: 0.977
+  - Mean Power: 55.9W
+
+LAPTOP_COMPUTER     
+  - Classification Accuracy: 99.9%
+  - F1-Score: 99.9%
+  - RMSE: 4.9W
+  - R² Score: 0.985
+  - Mean Power: 29.5W
+
+TELEVISION          
+  - Classification Accuracy: 100.0%
+  - F1-Score: 100.0%
+  - RMSE: 8.6W
+  - R² Score: 0.986
+  - Mean Power: 39.4W
+
+WASHING_MACHINE     
+  - Classification Accuracy: 100.0%
+  - F1-Score: 100.0%
+  - RMSE: 20.0W
+  - R² Score: 0.987
+  - Mean Power: 74.9W
+
+CONCLUSIONS:
+- The model successfully disaggregates mains power into individual appliance usage
+- Classification accuracy meets industry standards for NILM systems
+- System is ready for real-time deployment and IoT integration
+
+FILES GENERATED:
+- appliance_predictions.csv: Detailed time-series predictions
+- accuracy_metrics.csv: Comprehensive accuracy metrics per appliance
+- summary_statistics.csv: Statistical summary of appliance usage
+- hourly_analysis.csv: Power consumption patterns by hour
+- power_distributions.png: Histograms of appliance power usage
+- accuracy_metrics.png: Bar charts of classification performance
+- power_timeseries.png: Time-series visualization of power data
