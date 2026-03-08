@@ -40,31 +40,65 @@ def calculate_realistic_baseline():
     
     return (total_power / total_hours) / 1000
 
-def calculate_kseb_cost(total_units):
-    """KSEB billing calculation"""
+def calculate_energy_charge(units):
+    """Calculate energy charge based on KSEB 2025-2027 tariff"""
     cost = 0
-    units_remaining = total_units
-    
-    if units_remaining > 500:
-        cost += (units_remaining - 500) * 7.10
-        units_remaining = 500
-    if units_remaining > 400:
-        cost += (units_remaining - 400) * 7.00
-        units_remaining = 400
-    if units_remaining > 300:
-        cost += (units_remaining - 300) * 6.70
-        units_remaining = 300
-    if units_remaining > 200:
-        cost += (units_remaining - 200) * 5.20
-        units_remaining = 200
-    if units_remaining > 100:
-        cost += (units_remaining - 100) * 4.00
-        units_remaining = 100
-    cost += units_remaining * 3.30
-    
-    cost += 20  # Fixed charge
-    cost *= 1.15  # Electricity duty
+    if units <= 250:
+        # Telescopic
+        if units > 200:
+            cost += (units - 200) * 8.50
+            units = 200
+        if units > 150:
+            cost += (units - 150) * 7.20
+            units = 150
+        if units > 100:
+            cost += (units - 100) * 5.35
+            units = 100
+        if units > 50:
+            cost += (units - 50) * 4.25
+            units = 50
+        cost += units * 3.35
+    else:
+        # Non-telescopic
+        if units <= 300:
+            cost = units * 6.75
+        elif units <= 350:
+            cost = units * 7.60
+        elif units <= 400:
+            cost = units * 7.95
+        elif units <= 500:
+            cost = units * 8.25
+        else:
+            cost = units * 9.20
     return cost
+
+def calculate_fixed_charge(units):
+    """Calculate fixed charge based on KSEB 2025-2027 tariff"""
+    if units <= 50: return 50
+    if units <= 100: return 85
+    if units <= 150: return 105
+    if units <= 200: return 140
+    if units <= 250: return 160
+    if units <= 300: return 220
+    if units <= 350: return 240
+    if units <= 400: return 260
+    if units <= 500: return 285
+    return 310
+
+def calculate_total_bill(units):
+    """Generate structured response for KSEB bill"""
+    energy_charge = calculate_energy_charge(units)
+    fixed_charge = calculate_fixed_charge(units)
+    electricity_duty = energy_charge * 0.10
+    total_estimated_cost = energy_charge + fixed_charge + electricity_duty
+    
+    return {
+        "monthly_units": round(units, 2),
+        "energy_charge": round(energy_charge, 2),
+        "fixed_charge": round(fixed_charge, 2),
+        "electricity_duty": round(electricity_duty, 2),
+        "total_estimated_cost": round(total_estimated_cost, 2)
+    }
 
 def calculate_appliance_level_costs(current_appliances, monthly_kwh, total_cost):
     """Calculate cost breakdown per appliance"""
@@ -75,11 +109,11 @@ def calculate_appliance_level_costs(current_appliances, monthly_kwh, total_cost)
         if appliance_data["state"] == "ON":
             power_ratio = appliance_data["power"] / total_current_power if total_current_power > 0 else 0
             appliance_consumption = monthly_kwh * power_ratio
-            appliance_cost = calculate_kseb_cost(appliance_consumption)
+            appliance_bill = calculate_total_bill(appliance_consumption)
             
             appliance_costs[appliance_name] = {
                 "estimatedMonthlyConsumption": round(appliance_consumption, 2),
-                "estimatedMonthlyCost": round(appliance_cost, 2),
+                "estimatedMonthlyCost": round(appliance_bill["total_estimated_cost"], 2),
                 "currentPower": appliance_data["power"],
                 "contributionPercentage": round(power_ratio * 100, 1)
             }
@@ -101,12 +135,14 @@ def calculate_smart_monthly_estimate(current_appliances, days_elapsed=0):
         blended_usage_rate = realistic_baseline
     
     monthly_kwh = blended_usage_rate * 720  # 30 days * 24 hours
-    total_cost = calculate_kseb_cost(monthly_kwh)
+    bill_details = calculate_total_bill(monthly_kwh)
+    total_cost = bill_details["total_estimated_cost"]
     appliance_costs = calculate_appliance_level_costs(current_appliances, monthly_kwh, total_cost)
     
     return {
         "estimatedMonthlyConsumption": round(monthly_kwh, 2),
         "estimatedMonthlyCost": round(total_cost, 2),
+        "billDetails": bill_details,
         "applianceBreakdown": appliance_costs,
         "predictionMethod": "blended" if days_elapsed > 0 else "realistic_baseline",
         "confidence": min(0.3 + (days_elapsed / 30 * 0.7), 0.95)
