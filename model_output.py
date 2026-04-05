@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import time
 
 class ModelOutputDisplay:
-    def __init__(self, base_url="http://localhost:8000"):
+    def __init__(self, base_url="http://localhost:5000"):
         self.base_url = base_url
         self.api_url = f"{base_url}/predict"
         self.health_url = f"{base_url}/health"
@@ -195,7 +195,7 @@ def main():
     
     print("🤖 NILM Model Output Display")
     print("This script demonstrates realistic model predictions")
-    print("Make sure your API is running on http://localhost:8000")
+    print("Make sure your API is running on http://localhost:5000")
     print()
     
     try:

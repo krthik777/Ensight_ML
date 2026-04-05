@@ -215,33 +215,44 @@ class NILMInferenceService:
             "appliances": raw_results["power_predictions"]
         }
 
-    def detect_anomaly(self, mains_sequence):
-        """Endpoint 8: Detect unusual power spikes"""
+    def detect_anomaly(self, mains_sequence, room_threshold: float = 2000.0):
+        """Detect unusual power spikes. Uses both 3-sigma statistics AND
+        the room's configured threshold from MongoDB (rooms.threshold).
+        """
         if not mains_sequence or len(mains_sequence) == 0:
              return {"possible_faulty_appliance": False, "reason": "No data"}
              
         mean_power = np.mean(mains_sequence)
         std_power = np.std(mains_sequence)
-        
-        # Find if any recent point is > mean + 3*std
-        # Or just checking if max is an anomaly
         max_power = np.max(mains_sequence)
         
-        # Avoid division by zero and false positives on very low power
-        if std_power < 10 or mean_power < 50:
-            return {"possible_faulty_appliance": False}
-            
-        is_anomaly = max_power > (mean_power + 3 * std_power)
+        # Statistical anomaly: any point > mean + 3 * std
+        statistical_anomaly = bool(
+            std_power >= 10
+            and mean_power >= 50
+            and max_power > (mean_power + 3 * std_power)
+        )
+
+        # Threshold anomaly: reading exceeds room's configured limit
+        threshold_anomaly = bool(room_threshold > 0 and max_power > room_threshold)
+
+        is_anomaly = bool(statistical_anomaly or threshold_anomaly)
         
         result = {
-            "possible_faulty_appliance": bool(is_anomaly)
+            "possible_faulty_appliance": is_anomaly
         }
         
         if is_anomaly:
             result["details"] = {
                 "max_power": round(float(max_power), 2),
                 "mean_power": round(float(mean_power), 2),
-                "threshold": round(float(mean_power + 3 * std_power), 2)
+                "statistical_threshold": round(float(mean_power + 3 * std_power), 2),
+                "room_power_threshold": room_threshold,
+                "triggered_by": (
+                    "both" if statistical_anomaly and threshold_anomaly
+                    else "statistical" if statistical_anomaly
+                    else "room_threshold"
+                ),
             }
             
         return result

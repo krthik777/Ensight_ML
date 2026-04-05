@@ -1,6 +1,6 @@
 import requests
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://localhost:5000"
 
 def test_endpoints():
     print("Testing /detect-appliances...")

@@ -39,10 +39,16 @@ ENV/
 # Logs
 *.log
 
-# Large Data & Models
+# Large Data & Models (keep .pth — Render needs model weights)
 nilm-env/
 saved_models/
 evaluation_results/
 *.h5
 *.pkl
 *.gz
+
+# Training-only artefacts (not needed by API)
+plots/
+data/
+*.csv
+src/data/
