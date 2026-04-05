@@ -2,24 +2,28 @@ services:
   - type: web
     name: ensight-ml-backend
     runtime: python
-    plan: standard          # Standard ($25/mo) — needs ~1.5 GB RAM for PyTorch
-    region: singapore       # Closest to India; change to 'oregon' if your Node.js backend is US-hosted
+    plan: standard
+    region: singapore
 
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn wsgi:app --workers=2 --worker-class=sync --timeout=120 --bind=0.0.0.0:$PORT
+    startCommand: gunicorn wsgi:app --workers=1 --worker-class=sync --timeout=120 --bind=0.0.0.0:$PORT
 
-    # Health check — Render will restart service if this fails
     healthCheckPath: /health
+    autoDeploy: true
 
     envVars:
-      # MongoDB Atlas connection string
-      # Set the actual value in Render dashboard → Environment tab (do NOT commit passwords)
+      # ⚠️  IMPORTANT: The full Atlas URI must include the database name
+      # and connection options — set this exact string in Render dashboard
+      # under Environment → MONGO_URI (mark as Secret)
+      #
+      # Format:
+      #   mongodb+srv://<user>:<pass>@<cluster>.mongodb.net/<dbName>?retryWrites=true&w=majority
+      #
       - key: MONGO_URI
-        sync: false          # means: secret — set manually in Render dashboard
+        sync: false    # Secret — set manually in Render dashboard, never commit credentials
+
       - key: MONGO_DB
         value: energydashboard
+
       - key: PYTHON_VERSION
         value: "3.11.0"
-
-    # Auto-deploy whenever you push to main branch
-    autoDeploy: true
