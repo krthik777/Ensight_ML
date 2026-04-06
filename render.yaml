@@ -25,5 +25,8 @@ services:
       - key: MONGO_DB
         value: energydashboard
 
+      - key: PYTHONUNBUFFERED
+        value: "1"       # Force unbuffered stdout/stderr — required for logs to appear in Render
+
       - key: PYTHON_VERSION
         value: "3.11.0"
