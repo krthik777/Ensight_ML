@@ -6,7 +6,7 @@ services:
     region: singapore
 
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn wsgi:app --workers=1 --worker-class=sync --timeout=120 --bind=0.0.0.0:$PORT
+    startCommand: gunicorn wsgi:app --workers=1 --worker-class=sync --timeout=120 --preload --bind=0.0.0.0:$PORT
 
     healthCheckPath: /health
     autoDeploy: true
