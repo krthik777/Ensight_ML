@@ -7,11 +7,11 @@ database:
   path: "energy_data.db"
 
 # MongoDB — primary application database (Node.js backend shares this)
-# Override with MONGO_URI / MONGO_DB environment variables in production
+# ⚠️  DO NOT add credentials here — set MONGO_URI env var in Render dashboard
+# Local dev: set MONGO_URI in a .env file (add .env to .gitignore)
 mongodb:
-  uri: "mongodb+srv://EnSight:EnSight123@cluster0.vux9jvj.mongodb.net"
+  uri: ""                  # intentionally blank — MONGO_URI env var overrides this
   database: "energydashboard"
-  # How many recent power readings to use as the LSTM input window
   sequence_window: 50
 
 file_mappings:
