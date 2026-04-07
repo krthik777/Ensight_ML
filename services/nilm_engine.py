@@ -1,25 +1,26 @@
 """
 services/nilm_engine.py
 ------------------------
-Smart 3-tier NILM (Non-Intrusive Load Monitoring) engine.
+Smart 3-tier NILM engine.
 
-Tier 1 — DB Appliance Matching (most accurate):
-    If the user has appliances registered in MongoDB for this room,
-    use greedy power-signature matching to determine which ones are ON.
-    This uses the user's own powerRating / estimatedWattage data.
+Tier 1 — DB Appliance Matching (most accurate when user has registered appliances):
+    Greedy power matching against the user's own registered appliances in MongoDB.
+    Strict power conservation: sum of detected cannot exceed mains total.
+    Stops adding appliances once residual power < 5% of total.
 
-Tier 2 — LSTM Model:
-    Fall back to the trained LSTM model when no room appliances are found.
+Tier 2 — LSTM Model with power-conservation post-filter:
+    Falls back to trained LSTM. After detection, removes appliances whose
+    combined predicted power exceeds the actual mains reading.
 
 Tier 3 — Heuristic Rules:
-    If both above fail (model not loaded, no data), use rule-based
-    thresholds as a last resort.
+    Last resort when no readings exist. Returns empty if mean_power = 0.
 """
 
 import numpy as np
 from datetime import datetime
 
-# ── Appliance type → canonical NILM name mapping ─────────────────────────────
+
+# ── Appliance type → canonical name ──────────────────────────────────────────
 _TYPE_TO_NAME = {
     "Air Conditioner":   "air_conditioner",
     "Refrigerator":      "fridge",
@@ -35,85 +36,86 @@ _TYPE_TO_NAME = {
     "Other":             "other",
 }
 
+
 def _canonical(appliance: dict) -> str:
-    """Return a normalised name key for an appliance."""
-    raw_name = appliance.get("name", "")
     raw_type = appliance.get("type", "")
+    raw_name = appliance.get("name", "")
     return _TYPE_TO_NAME.get(raw_type, raw_name.lower().replace(" ", "_"))
 
 
-# ── Tier 1: DB appliance power matching ──────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# Tier 1 — DB Appliance Matching
+# ════════════════════════════════════════════════════════════════════════════
 
 def match_appliances_to_power(
     mean_power_w: float,
-    db_appliances: list[dict],
-    tolerance: float = 0.20,         # ±20 % of rated power counts as "possible ON"
+    db_appliances: list,
 ) -> dict:
     """
-    Greedy matching: which combination of registered appliances best
-    explains the observed mains power?
+    Greedy matching: find which registered appliances best explain the mains reading.
 
-    Algorithm:
-      1. Sort appliances by estimatedWattage descending.
-      2. Accumulate: mark an appliance ON if adding its load doesn't
-         exceed the remaining unexplained power by more than `tolerance`.
-      3. Confidence = 1 - (abs_error / mean_power_w).
+    Rules:
+      1. Sort appliances by rated power (highest first).
+      2. Mark an appliance ON if remaining unexplained power ≥ 70% of its rated power.
+         (70% threshold — must account for most of its typical load, not just noise)
+      3. Stop early when remaining power < 5% of total (further additions are noise).
+      4. Final guard: sum of detected appliance powers must not exceed total × 1.05.
 
-    Args:
-        mean_power_w : Average mains power over last N readings (Watts).
-        db_appliances: List of appliance dicts from MongoDB.
-        tolerance    : Fractional over-allocation allowed per appliance.
-
-    Returns:
-        {
-          "active_appliances": [...],
-          "confidence":        {name: score, ...},
-          "power_breakdown":   {name: watts, ...},
-          "total_matched_w":   float,
-          "unmatched_w":       float,   # power not explained by known appliances
-          "tier":              "db_matching",
-        }
+    An appliance with powerRating = 0 or estimatedWattage = 0 is always skipped
+    because we have no credible power reference for it.
     """
-    if not db_appliances or mean_power_w <= 0:
+    if not db_appliances or mean_power_w <= 30:
+        # < 30W total — too low to reliably detect anything
         return _empty_result("db_matching")
 
-    # Sort highest power first so large appliances are checked first
+    # Minimum threshold to stop adding more appliances.
+    # Once <5% of total power is unexplained, further detections are noise.
+    stop_threshold = max(30.0, mean_power_w * 0.05)
+
     sorted_apps = sorted(
         db_appliances,
-        key=lambda a: a.get("estimatedWattage") or a.get("powerRating") or 0,
+        key=lambda a: (a.get("estimatedWattage") or a.get("powerRating") or 0),
         reverse=True,
     )
 
-    remaining_w = mean_power_w
-    active = []
-    confidence = {}
+    remaining_w   = mean_power_w
+    active        = []
+    confidence    = {}
     power_breakdown = {}
 
     for app in sorted_apps:
+        # Stop when we've explained ≥ 95% of total power
+        if remaining_w < stop_threshold:
+            break
+
         typical_w = app.get("estimatedWattage") or app.get("powerRating") or 0
         if typical_w <= 0:
+            # No credible power reference — skip
             continue
 
-        # ON if its load fits within remaining + tolerance
-        if remaining_w >= typical_w * (1 - tolerance):
-            name = _canonical(app)
+        # ON condition: remaining unexplained power must be ≥ 70% of rated power.
+        # This prevents detecting e.g. a 1500W AC when only 200W is unexplained.
+        if remaining_w >= typical_w * 0.70:
+            name    = _canonical(app)
             consumed = min(typical_w, remaining_w)
+
+            # Confidence based on how well the appliance fits the remaining load
+            # (consumed / typical): 1.0 = perfect fit, 0.7 = minimum
+            fit_ratio  = consumed / typical_w
+            conf       = round(max(0.60, min(0.99, fit_ratio)), 2)
+
             active.append(name)
             power_breakdown[name] = round(consumed, 2)
-
-            # Confidence: how closely the appliance power fits the remaining load
-            fit_ratio = consumed / typical_w
-            conf = max(0.5, min(0.99, fit_ratio))
-            confidence[name] = round(conf, 2)
-
-            remaining_w = max(0.0, remaining_w - consumed)
+            confidence[name]      = conf
+            remaining_w           = max(0.0, remaining_w - consumed)
 
     total_matched = mean_power_w - remaining_w
 
     print(
         f"🔍 [nilm_engine] DB matching → "
-        f"{len(active)} active / {len(db_appliances)} registered | "
-        f"matched={total_matched:.0f}W, unmatched={remaining_w:.0f}W"
+        f"{len(active)}/{len(db_appliances)} appliances active | "
+        f"mains={mean_power_w:.0f}W  matched={total_matched:.0f}W  "
+        f"unmatched={remaining_w:.0f}W"
     )
 
     return {
@@ -121,132 +123,163 @@ def match_appliances_to_power(
         "confidence":        confidence,
         "power_breakdown":   power_breakdown,
         "total_matched_w":   round(total_matched, 2),
-        "unmatched_w":       round(remaining_w,   2),
+        "unmatched_w":       round(remaining_w, 2),
         "tier":              "db_matching",
     }
 
 
-# ── Tier 2: LSTM model wrapper ────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# Tier 2 — LSTM Model with power-conservation filter
+# ════════════════════════════════════════════════════════════════════════════
 
 def run_lstm_detection(
-    mains_sequence: list[float],
+    mains_sequence: list,
+    mean_power_w: float,
     inference_service,
 ) -> dict:
     """
-    Call the LSTM-based NILMInferenceService and normalise output to the
-    same shape as match_appliances_to_power().
+    Run the LSTM model and apply a power-conservation post-filter.
+
+    The LSTM often over-predicts (outputs non-zero for appliances that are off).
+    Post-filter: remove appliances with lowest confidence until
+    sum(active powers) ≤ total_mains × 1.10.
+
+    Also enforces a minimum power threshold per appliance:
+    an appliance must be predicted to consume ≥ max(15W, 2% of mains) to count as ON.
     """
-    raw = inference_service.detect_appliances(mains_sequence)
-    pwr = inference_service.predict_appliance_power(mains_sequence)
+    raw  = inference_service.detect_appliances(mains_sequence)
+    pwr  = inference_service.predict_appliance_power(mains_sequence)
 
-    active = raw.get("active_appliances", [])
-    conf   = raw.get("confidence", {})
-    power  = pwr.get("appliances", {})
+    active_raw = raw.get("active_appliances", [])
+    conf_raw   = raw.get("confidence", {})
+    power_map  = pwr.get("appliances", {})
 
-    total = sum(power.get(a, 0) for a in active)
+    # --- Minimum per-appliance power threshold ---
+    # An appliance must account for at least 2% of mains or 15W (whichever larger)
+    min_watts = max(15.0, mean_power_w * 0.02)
 
-    print(f"🤖 [nilm_engine] LSTM → {len(active)} active appliances detected")
+    active = [
+        a for a in active_raw
+        if power_map.get(a, 0) >= min_watts
+    ]
+    conf   = {a: conf_raw.get(a, 0.5) for a in active}
+    power  = {a: round(power_map.get(a, 0), 2) for a in active}
+
+    # --- Power conservation: prune until sum ≤ mains × 1.10 ---
+    if mean_power_w > 0:
+        budget = mean_power_w * 1.10
+        # Sort by confidence ascending so we remove least-confident first
+        while sum(power.get(a, 0) for a in active) > budget and active:
+            # Remove lowest confidence appliance
+            worst = min(active, key=lambda a: conf.get(a, 0))
+            active.remove(worst)
+            conf.pop(worst, None)
+            power.pop(worst, None)
+
+    total = sum(power.values())
+
+    print(
+        f"🤖 [nilm_engine] LSTM → {len(active)} active "
+        f"(after power-conservation filter, budget={mean_power_w:.0f}W)"
+    )
 
     return {
         "active_appliances": active,
         "confidence":        conf,
-        "power_breakdown":   {a: round(power.get(a, 0), 2) for a in active},
+        "power_breakdown":   power,
         "total_matched_w":   round(total, 2),
-        "unmatched_w":       0.0,
+        "unmatched_w":       round(max(0, mean_power_w - total), 2),
         "tier":              "lstm_model",
     }
 
 
-# ── Tier 3: heuristic fallback ────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# Tier 3 — Heuristic fallback
+# ════════════════════════════════════════════════════════════════════════════
 
+# (name, min_power_threshold_w, typical_w)
 _HEURISTIC_RULES = [
-    # (name,             threshold_w, typical_w, base_prob)
-    ("air_conditioner",  900,  1500, 0.50),
-    ("washing_machine",  400,   500, 0.20),
-    ("water_motor",      350,   600, 0.15),
-    ("iron",             700,  1000, 0.10),
-    ("kitchen_outlets",  250,   400, 0.35),
-    ("television",        80,   150, 0.40),
-    ("laptop_computer",   40,    65, 0.45),
-    ("fridge",            50,   120, 0.80),   # almost always on
-    ("water_filter",      20,    45, 0.70),
+    ("air_conditioner",  900,  1500),
+    ("washing_machine",  350,   500),
+    ("water_motor",      300,   600),
+    ("iron",             700,  1000),
+    ("kitchen_outlets",  200,   400),
+    ("television",       100,   150),
+    ("laptop_computer",   50,    65),
+    ("fridge",            80,   120),
+    ("water_filter",      30,    45),
 ]
 
-def heuristic_detection(mean_power_w: float) -> dict:
-    """Rule-based fallback — no model, no DB appliances needed."""
-    active = []
-    confidence = {}
-    power_breakdown = {}
-    remaining = mean_power_w
 
-    for name, threshold, typical, base_prob in _HEURISTIC_RULES:
-        if remaining <= 0:
+def heuristic_detection(mean_power_w: float) -> dict:
+    """
+    Rule-based fallback — deterministic (no randomness).
+    An appliance is ON if the total mains reading exceeds its minimum threshold
+    AND adding it does not cause the total to exceed mains power.
+    Returns empty if mean_power_w < 30W (no meaningful load).
+    """
+    if mean_power_w < 30:
+        return _empty_result("heuristic")
+
+    remaining     = mean_power_w
+    active        = []
+    confidence    = {}
+    power_breakdown = {}
+    stop_threshold = max(30.0, mean_power_w * 0.05)
+
+    for name, threshold, typical in _HEURISTIC_RULES:
+        if remaining < stop_threshold:
             break
-        is_on = (
-            mean_power_w > threshold
-            and np.random.random() < base_prob + (mean_power_w / 5000) * 0.2
-        )
-        if is_on:
+        if mean_power_w > threshold and remaining >= typical * 0.70:
             consumed = min(typical, remaining)
             active.append(name)
             power_breakdown[name] = round(consumed, 2)
-            confidence[name] = round(base_prob, 2)
+            confidence[name]      = round(min(0.85, consumed / typical), 2)
             remaining -= consumed
 
     print(
         f"⚙️  [nilm_engine] Heuristic → {len(active)} active "
-        f"(mean={mean_power_w:.0f}W)"
+        f"(mains={mean_power_w:.0f}W)"
     )
 
     return {
         "active_appliances": active,
         "confidence":        confidence,
         "power_breakdown":   power_breakdown,
-        "total_matched_w":   round(mean_power_w - max(remaining, 0), 2),
-        "unmatched_w":       round(max(remaining, 0), 2),
+        "total_matched_w":   round(mean_power_w - remaining, 2),
+        "unmatched_w":       round(remaining, 2),
         "tier":              "heuristic",
     }
 
 
-# ── Main entry point ──────────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# Main entry point
+# ════════════════════════════════════════════════════════════════════════════
 
 def smart_nilm_detect(
-    mains_sequence:  list[float],
-    db_appliances:   list[dict],
+    mains_sequence:   list,
+    db_appliances:    list,
     inference_service,
 ) -> dict:
     """
-    Pick the best available NILM tier and return a normalised result dict.
+    3-tier NILM detection with power-conservation guarantee.
 
-    Args:
-        mains_sequence   : Recent power readings (Watts), oldest → newest.
-        db_appliances    : Appliances from MongoDB for this room (may be []).
-        inference_service: NILMInferenceService instance (may have None model).
-
-    Returns: dict with keys:
-        active_appliances, confidence, power_breakdown,
-        total_power_w, unmatched_w, mean_power_w, tier, timestamp
+    Returns consistent dict with:
+      active_appliances, confidence, power_breakdown,
+      total_power_w, mean_power_w, unmatched_w, tier, timestamp
     """
     mean_power_w = float(np.mean(mains_sequence)) if mains_sequence else 0.0
 
-    # ── Tier 1 ───────────────────────────────────────────────────────────────
+    # ── Tier 1: user's registered appliances ─────────────────────────────────
     if db_appliances:
         result = match_appliances_to_power(mean_power_w, db_appliances)
-        result["mean_power_w"]  = round(mean_power_w, 2)
-        result["total_power_w"] = round(mean_power_w, 2)
-        result["timestamp"]     = datetime.now().isoformat()
-        return result
+    # ── Tier 2: LSTM model ────────────────────────────────────────────────────
+    elif mains_sequence and inference_service and inference_service.model is not None:
+        result = run_lstm_detection(mains_sequence, mean_power_w, inference_service)
+    # ── Tier 3: heuristic ─────────────────────────────────────────────────────
+    else:
+        result = heuristic_detection(mean_power_w)
 
-    # ── Tier 2 ───────────────────────────────────────────────────────────────
-    if mains_sequence and inference_service and inference_service.model is not None:
-        result = run_lstm_detection(mains_sequence, inference_service)
-        result["mean_power_w"]  = round(mean_power_w, 2)
-        result["total_power_w"] = round(mean_power_w, 2)
-        result["timestamp"]     = datetime.now().isoformat()
-        return result
-
-    # ── Tier 3 ───────────────────────────────────────────────────────────────
-    result = heuristic_detection(mean_power_w)
     result["mean_power_w"]  = round(mean_power_w, 2)
     result["total_power_w"] = round(mean_power_w, 2)
     result["timestamp"]     = datetime.now().isoformat()

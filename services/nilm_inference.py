@@ -85,35 +85,28 @@ class NILMInferenceService:
             with torch.no_grad():
                 prediction = self.model(input_tensor).numpy()[0]
             
-            appliances_power = {}
+            appliances_power  = {}
             confidence_scores = {}
-            base_confidence = min(0.95, np.max(prediction) * 1.5)
-            
-            for i, appliance_name in enumerate(self.config['appliance_names']):
-                power = prediction[i] * self.config['max_values'][f"{appliance_name}_W"]
-                power = max(0, float(power))
-                
-                # Format to user's desired names if possible or keep original
-                # Node backend probably expects the exact names from Python
-                appliances_power[appliance_name] = round(power, 2)
-                
-                # Simple confidence calculation based on output activation strength
-                conf = min(0.99, base_confidence + (prediction[i] * 0.1))
-                if power < 15:
-                    # High confidence it's OFF
-                    conf = 0.90 + (1 - prediction[i] * 5)
-                    conf = min(0.99, conf)
-                    
-                confidence_scores[appliance_name] = round(float(conf), 2)
-                
-            # Calculate 'Other' power based on remaining unaccounted mains power
+
             mean_mains = float(np.mean(mains_seq))
-            sum_predicted = sum(appliances_power.values())
-            other_power = max(0.0, mean_mains - sum_predicted)
-            
-            appliances_power['other'] = round(other_power, 2)
-            # Default to fairly high confidence as it represents a mathematical remainder
-            confidence_scores['other'] = 0.8 if other_power > 15 else 0.95
+
+            for i, appliance_name in enumerate(self.config['appliance_names']):
+                raw_activation = float(prediction[i])   # 0.0 – 1.0 (model output)
+                max_w = self.config['max_values'].get(f"{appliance_name}_W", 1000.0)
+                power = max(0.0, raw_activation * max_w)
+
+                appliances_power[appliance_name] = round(power, 2)
+
+                # Confidence = how strong the activation is (higher = more confident ON)
+                # Capped at 0.95 to avoid false certainty
+                conf = round(min(0.95, max(0.30, raw_activation)), 2)
+                confidence_scores[appliance_name] = conf
+
+            # 'other' = unexplained remainder (not a real appliance, used internally)
+            sum_predicted  = sum(appliances_power.values())
+            other_power    = max(0.0, mean_mains - sum_predicted)
+            appliances_power['other']   = round(other_power, 2)
+            confidence_scores['other'] = 0.5
                 
             return {
                 "power_predictions": appliances_power,
@@ -182,26 +175,38 @@ class NILMInferenceService:
         }
 
     def detect_appliances(self, mains_sequence):
-        """Endpoint 1: Detect which appliances are ON"""
+        """Endpoint 1: Detect which appliances are ON.
+
+        ON threshold: predicted power >= max(15W, 8% of mean mains).
+        This prevents a 1500W AC being flagged ON from a 20W prediction.
+        Without this, the LSTM outputs small non-zero values for every
+        appliance and everything incorrectly appears active.
+        """
         raw_results = self.get_raw_predictions(mains_sequence)
-        
+
         if not raw_results.get("success"):
             return raw_results
-            
+
         power_preds = raw_results["power_predictions"]
         conf_scores = raw_results["confidence_scores"]
-        
+
+        # Dynamic ON threshold relative to actual mains load
+        mean_mains = float(np.mean(mains_sequence)) if mains_sequence else 0.0
+        on_threshold = max(15.0, mean_mains * 0.08)   # ≥ 8% of total mains
+
         active_appliances = []
         active_confidence = {}
-        
+
         for app, power in power_preds.items():
-            if power > 15:  # ON threshold
+            if app == "other":
+                continue   # 'other' is a remainder bucket, not a real appliance
+            if power >= on_threshold:
                 active_appliances.append(app)
-                active_confidence[app] = conf_scores[app]
-                
+                active_confidence[app] = conf_scores.get(app, 0.5)
+
         return {
             "active_appliances": active_appliances,
-            "confidence": active_confidence
+            "confidence":        active_confidence,
         }
         
     def predict_appliance_power(self, mains_sequence):
