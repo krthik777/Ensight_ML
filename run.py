@@ -5,6 +5,16 @@ Run from the project root: python run.py
 import sys
 import os
 
+# Load .env BEFORE any other imports so MONGO_URI is available
+# when api/mongo_client.py initialises at import time.
+# On Render this is a no-op (env vars come from the dashboard).
+try:
+    from dotenv import load_dotenv
+    load_dotenv()          # reads .env from project root
+    print("📄 Loaded .env file")
+except ImportError:
+    pass   # python-dotenv not installed — env vars must be set another way
+
 # Ensure project root is always in sys.path so all modules resolve correctly
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
